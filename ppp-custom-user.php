@@ -23,6 +23,9 @@
       add_action('init', array($this, 'init'));
       add_action( 'user_register', array($this,'ppp_update_user_meta'), 10, 1 );
       add_filter( 'user_row_actions', array( $this, 'ppp_user_table_action' ), 10, 2 );
+      add_filter( 'manage_users_columns', array($this,'ppp_modify_user_column_table') );
+      add_filter( 'manage_users_custom_column', array($this,'ppp_modify_user_table_row'), 10, 3 );
+
 
 			// add_action( 'wp_ajax_checkdirectory', array($this,'checkdirectory') );
       $this->email_admin = 'rega@softwareseni.com' ;
@@ -41,11 +44,60 @@
       //for activating user
       if (isset($_GET['ppp_code'])) 
         $this->ppp_after_register();
+
+      //for updating user
+      if (isset($_POST['act']) && $_POST['act']=='ppp_update_user' && wp_get_current_user()->ID!=0) { //user should login first 
+        $this->ppp_user_update();
+      }
       
 
       /*//for accept user
       if (isset($_GET['act']) && $_GET['act']=='accept_user' && isset($_GET['code']) && isset($_GET['user_id'])) 
         $this->ppp_accept_process();*/
+    }
+
+    function ppp_user_update(){
+      $user=wp_get_current_user();
+       $userdata = array(
+        'user_email'=>$_POST['email'],
+        'ID'=>$user->ID,
+      );
+      //update user_login
+      // $wpdb->update($wpdb->users, array('user_login' => $new_user_login), array('ID' => $user_id));
+      // 
+      //check if password and current password filled
+      if (!empty($_POST['password']) && !empty($_POST['current_password'])) {
+        $wp_hasher = new PasswordHash(8, TRUE);
+
+        $password_hashed = $user->data->user_pass;
+        $plain_password = $_POST['current_password'];
+
+        //matching password
+        if($wp_hasher->CheckPassword($plain_password, $password_hashed)) {
+            $userdata['user_pass']=$_POST['password'];
+        } else {
+            $this->message='Your current password is wrong';
+            return;
+        }
+      }
+
+     
+      //update email
+      $update = wp_update_user( $userdata );
+
+      if (is_numeric($update)) {
+        //success message
+        $this->message = 'Your account has been updated';
+      }else{
+        $message='';
+        foreach ($update->errors as $key => $error_type) {
+          foreach ($error_type as $key_error => $value_error) {
+            $message .=$value_error; 
+          }
+        }
+        //sending error message
+        $this->message = $message;
+      }
     }
 
     function ppp_user_table_action( $actions, $user ) {
@@ -89,10 +141,15 @@
   	function ppp_load_page($atts, $content = null){
   		extract(shortcode_atts(array(
         'template' => ''), $atts));
+      $file = plugin_dir_path( __FILE__ ).'template/'.$template.'.php';
   		
       if (!empty($template)) {
         ob_start();
-        require 'template/'.$template.'.php';
+        if (file_exists($file)) {
+          require 'template/'.$template.'.php';
+        }else{
+          echo "Template Not found";
+        }
         return ob_get_clean();
       }else{
         return false;
@@ -395,14 +452,14 @@
         $hash_reject_key = base64_encode($reject_key);
 
         if ($admin) {
-          $base_url=get_admin_url('','users.php/');
+          $ppp_base_url=get_admin_url('','users.php');
         }else{
-          $base_url=site_url().'/';
+          $ppp_base_url=site_url();
         }
         $url = array(
-          'activation_url' => $base_url.'?ppp_code='.$hash_activation_key,
-          'accept_url' => $base_url.'?ppp_code='.$hash_accept_key,
-          'reject_url' => $base_url.'?ppp_code='.$hash_reject_key,
+          'activation_url' => $ppp_base_url.'?ppp_code='.$hash_activation_key,
+          'accept_url' => $ppp_base_url.'?ppp_code='.$hash_accept_key,
+          'reject_url' => $ppp_base_url.'?ppp_code='.$hash_reject_key,
         );
         return $url;
       }else{
@@ -423,11 +480,11 @@
         wp_set_auth_cookie( $creds['ID'] );
         wp_redirect(site_url());exit;
       }else{
-        $creds=array();
-        $creds['user_login'] = $cred['email'];
-        $creds['user_password'] = $cred['password'];
-        $creds['remember'] = (isset($cred['remember']))?$cred['remember']:true;
-        $user = wp_signon( $creds, false );
+        $creds_login=array();
+        $creds_login['user_login'] = $creds['email'];
+        $creds_login['user_password'] = $creds['password'];
+        $creds_login['remember'] = (isset($creds['remember']))?$creds['remember']:true;
+        $user = wp_signon( $creds_login, false );
         if ( is_wp_error($user) ){
           $this->message = $user->get_error_message();
           // die();
@@ -438,6 +495,21 @@
     }
     
 
+    function ppp_modify_user_column_table( $column ) {
+        $column['status'] = 'Status';
+        // $column['xyz'] = 'XYZ';
+        return $column;
+    }
+
+    function ppp_modify_user_table_row( $val, $column_name, $user_id ) {
+        switch ($column_name) {
+            case 'status' :
+                return get_user_meta( $user_id, 'status', true );
+                break;
+            default:
+        }
+        return $val;
+    }
   }
 
   $ppp_custom_user = new ppp_custom_user;
