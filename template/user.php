@@ -5,10 +5,10 @@ $current_user = wp_get_current_user();
  ?>
 <?php if ($current_user->ID!=0): 
 $meta_data = get_user_meta( $current_user->ID );
-echo "<pre>";
+/*echo "<pre>";
 var_dump($current_user);
 var_dump($meta_data);
-echo "</pre>";
+echo "</pre>";*/
 ?>
 	
 <form action="?act=ppp_update_user" method="post">
