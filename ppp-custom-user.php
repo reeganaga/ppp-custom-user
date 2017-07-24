@@ -87,7 +87,7 @@
             //succesfull login,
             
             //get user page id
-            $user_page_id=$wpdb->get_var("SELECT `ID` FROM $wpdb->posts where `post_content` like '%[ppp_load_page template=login]%' and post_status='publish'");
+            $user_page_id=$wpdb->get_var("SELECT `ID` FROM $wpdb->posts where `post_content` like '%[ppp_load_page template=user]%' and post_status='publish'");
             //get user page url
             $url = get_permalink( $user_page_id);
             //redirect user to member page
@@ -102,7 +102,7 @@
             wp_logout();
             // $WP_Error = new WP_Error();
             // $WP_Error->add('my_error', '<strong>Error</strong>: Something went wrong.');
-            //logging out user
+            //logging out user_
           }
         }
         // die('you are login');
@@ -432,6 +432,7 @@
     }
 
     function ppp_after_register(){
+      global $wpdb;
       $hash_code = $_GET['ppp_code'];
       $code = base64_decode($hash_code);
       $arr_code = json_decode($code,true);
@@ -472,7 +473,11 @@
             var_dump($data_user);*/
             
             $cred = array('ID'=>$data_user->ID,'username'=>$data_user->data->user_login);
-            $this->ppp_login_validation($cred,true);          
+            //get user page id
+            $user_page_id=$wpdb->get_var("SELECT `ID` FROM $wpdb->posts where `post_content` like '%[ppp_load_page template=user]%' and post_status='publish'");
+            //get user page url
+            $url = get_permalink( $user_page_id);
+            $this->ppp_login_validation($cred,true,$url);          
           }else{
             $this->ppp_force_404();
           }
@@ -609,12 +614,16 @@
       die();
     }
 
-    function ppp_login_validation($creds,$bypass=false){
+    function ppp_login_validation($creds,$bypass=false,$url=''){
       //login process begin
       if ($bypass) {
         wp_set_current_user( $creds['ID'], $creds['username'] );
         wp_set_auth_cookie( $creds['ID'] );
-        wp_redirect(site_url());exit;
+        if (!empty($url)) {
+          wp_redirect($url);exit;
+        }else{
+          wp_redirect(site_url());exit;
+        }
       }else{
         $creds_login=array();
         $creds_login['user_login'] = $creds['email'];
@@ -625,7 +634,11 @@
           $this->message = $user->get_error_message();
           // die();
         }else{
-          wp_redirect(site_url());exit;
+          if (!empty($url)) {
+            wp_redirect($url);exit;
+          }else{
+            wp_redirect(site_url());exit;
+          }
         }
       }
     }
