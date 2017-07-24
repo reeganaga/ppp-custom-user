@@ -2,10 +2,10 @@
    /*
    Plugin Name: Private Property Custom login
    Plugin URI: http://agentpoint.com.au
-   Description: a plugin to create awesomeness and spread joy
+   Description: create user custom register, login, profile, verification user - accept or reject from admin and email 
    Version: 0.0.1
-   Author: rega@agentpoint.com.au
-   Author URI: http://mrtotallyawesome.com
+   Author: agentpoint
+   Author URI: http://agentpoint.com.au
    License: GPL2
    */
   
