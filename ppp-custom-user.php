@@ -23,11 +23,12 @@
   	{
 			add_shortcode("ppp_load_page", array($this,"ppp_load_page"));
       add_action('init', array($this, 'init'));
-      add_action( 'user_register', array($this,'ppp_update_user_meta'), 10, 1 );
+      add_action( 'user_register', array($this,'ppp_update_user_meta_after_register'), 10, 1 );
       add_filter( 'user_row_actions', array( $this, 'ppp_user_table_action' ), 10, 2 );
       add_filter( 'manage_users_columns', array($this,'ppp_modify_user_column_table') );
       add_filter( 'manage_users_custom_column', array($this,'ppp_modify_user_table_row'), 10, 3 );
       add_action('wp_login', array($this,'ppp_login_check'), 10, 2);
+      // add_action('wp_logout', array($this,'ppp_after_logout'), 10, 2);
       // add_filter( 'login_redirect', 'ppp_login_redirect', 10, 3 );
 
       register_activation_hook(__FILE__, array($this, 'install'));
@@ -57,6 +58,9 @@
         $this->ppp_user_update();
       }
       
+      if(!empty($_GET['custom_logout_message'])){
+       add_filter('login_message', array($this,'ppp_login_message'));
+      }
 
       /*//for accept user
       if (isset($_GET['act']) && $_GET['act']=='accept_user' && isset($_GET['code']) && isset($_GET['user_id'])) 
@@ -65,16 +69,16 @@
 
     function ppp_login_check( $user_login, $user ) {
       global $wpdb;
-      echo "<pre>";
+      /*echo "<pre>";
         var_dump($user_login);
         var_dump($user);
-        echo "</pre>";
+        echo "</pre>";*/
         if (!in_array( 'administrator', $user->roles )) {
           //check user if not admin
           //get metadata
           $status = get_user_meta( $user->ID, 'status', true );
           if ($status=='pending') {
-            $message = 'You are account still pending';
+            $message = 'Your account still pending';
           }elseif ($status=='approved') {
             $message = 'You need to activate your account, check you email for ';
           }elseif ($status=='rejected') {
@@ -90,39 +94,30 @@
             wp_redirect( $url );exit();
           }
           if (isset($message)) { //fail login
-            echo "
-            <script type='text/javascript'>
-              alert('".$message."');
-            </script>";
-            //logging out user
-            wp_logout();
-          }
 
+            //add message for custom login
+            // $this->message=esc_url($message,'');
+            $this->message=$message;
+            add_action('wp_logout', array($this,'ppp_after_logout'));
+            wp_logout();
+            // $WP_Error = new WP_Error();
+            // $WP_Error->add('my_error', '<strong>Error</strong>: Something went wrong.');
+            //logging out user
+          }
         }
         // die('you are login');
     }
 
-    function ppp_login_redirect( $redirect_to, $request, $user ) {
-      //is there a user to check?
-      /*echo "<pre>";
-      var_dump($redirect_to);
-      var_dump($request);
-      var_dump($user);
-      echo "<pre>";
-      die();*/
-      if ( isset( $user->roles ) && is_array( $user->roles ) ) {
-        //check for admins
-        if ( in_array( 'administrator', $user->roles ) ) {
-          // redirect them to the default place
-          return $redirect_to;
-        } else {
-          return home_url();
-        }
-      } else {
-        return $redirect_to;
-      }
+    function ppp_after_logout(){
+      wp_redirect( site_url().'/wp-login.php?custom_logout_message='.base64_encode($this->message) );
+      exit();
     }
 
+    //If the custom parameter is set display the message on the login screen
+    function ppp_login_message() {
+       $message = '<p class="message">'.base64_decode($_GET['custom_logout_message']).'</p><br />';
+       return $message;
+    }
 
     function install(){
       //setting default option
@@ -130,11 +125,22 @@
       update_option('ppp_admin_code' , $this->default_admin_code);
 
       //generate default page
-      
+      $this->create_page();
     }
 
     function create_page(){
-      //check 
+      global $wpdb;
+      $arr_page = array('login','register','user');
+
+      //create new page
+      foreach ($arr_page as $page) {
+        $post_parent=$wpdb->get_var("select ID from $wpdb->posts where post_content='[ppp_load_page template=".$page."]' and post_status='publish' and post_type='page' order by ID limit 1");
+        if(!$post_parent){
+          // wp_insert_post(array('post_title'=>$page, 'post_content'=>'[ppp_load_page template='.$page.']'), true); 
+          wp_insert_post(array( 'post_status' => 'publish', 'post_type' => 'page', 'post_title'=>ucwords(strtolower($page)), 'post_content'=>'[ppp_load_page template='.$page.']'));
+        }
+      }
+
     }
 
     function ppp_user_update(){
@@ -225,7 +231,7 @@
       if ( $user_status == 'pending' ) {
         $actions[] = $approve_action;
         $actions[] = $deny_action;
-      } else if ( $user_status == 'approved' ) {
+      } else if ( $user_status == 'approved' || $user_status == 'valid' ) {
         $actions[] = $deny_action;
       } else if ( $user_status == 'rejected' ) {
         $actions[] = $approve_action;
@@ -330,7 +336,7 @@
       if ($data_user) { 
         $status = get_user_meta( $data_user->ID, 'status', true );
           // var_dump($data_user);
-          var_dump($status);
+          // var_dump($status);
         if ($status=='pending') {
           $this->message="Your account Not activated";
         }elseif ($status=='approved') {
@@ -351,14 +357,19 @@
         
     }
 
-    function ppp_update_user_meta( $user_id ) {
+    function gen_activation_key($user_id=''){
+      $activation_key = strtotime("now").$user_id;
+      $activation_key = wp_hash_password($activation_key);
+      return $activation_key;
+    }
+    function ppp_update_user_meta_after_register( $user_id ) {
 
       /*//updating status user for the first time
       update_user_meta($user_id, 'status', 'pending');*/
 
       //create hash for activating user 
-      $activation_key = strtotime("now").$user_id;
-      $activation_key = wp_hash_password($activation_key);
+      $activation_key = $this->gen_activation_key($user_id);
+
       // update_user_meta($user_id, 'activation_key', $activation_key);
       
       /*if ( isset( $_POST['private_banker_name'] ) )
@@ -366,15 +377,18 @@
       if ( isset( $_POST['phone'] ) )
         update_user_meta($user_id, 'phone', $_POST['phone']);*/
 
-
-      $user_meta = array(
-        'private_banker_name'=>(isset( $_POST['private_banker_name'] ))?isset( $_POST['private_banker_name'] ):'',
-        'phone'=>(isset( $_POST['phone'] ))?isset( $_POST['phone'] ):'',
-        'activation_key'=>$activation_key,
-        'status'=>'pending',
-      );
-      //updating all usermeta
-      $this->update_user_meta_key($user_id,$user_meta);
+      $data_user = get_user_by('ID',$user_id);
+      if (!in_array( 'administrator', $data_user->roles )) { //updating meta user if not admin role
+        $user_meta = array(
+          'private_banker_name'=>(isset( $_POST['private_banker_name'] ))?isset( $_POST['private_banker_name'] ):'',
+          'phone'=>(isset( $_POST['phone'] ))?isset( $_POST['phone'] ):'',
+          'activation_key'=>$activation_key,
+          'status'=>'pending',
+          'show_admin_bar_front'=> 'false', //disable toolbar all user when registered
+        );
+        //updating all usermeta
+        $this->update_user_meta_key($user_id,$user_meta);
+      }
     }
 
     function test_email (){
@@ -387,6 +401,11 @@
       var_dump($url);
       var_dump("admin email = ".$this->email_admin);
 
+      //get user
+      $data_user = get_user_by('ID',$_GET['id']);
+      echo "<pre>";
+      var_dump($data_user);
+      echo "</pre>";
 
       var_dump(get_bloginfo('name'));
       var_dump("From:".get_bloginfo('name')." <".$this->email_admin.">");
@@ -481,7 +500,9 @@
           if ($code == $user_meta['activation_key'][0]) {
             //updating user meta for validating user
             update_user_meta($user_id, 'status', 'rejected');
-            
+            //updating user meta activation_key to prevent user to activate with old link
+            $activation_key = $this->gen_activation_key($user_id);
+            update_user_meta($user_id, 'activation_key', $activation_key);
 
             /*//updating user meta remove activation key
             update_user_meta($user_id, 'activation_key', '');*/
