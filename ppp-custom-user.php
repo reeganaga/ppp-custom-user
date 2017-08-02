@@ -28,6 +28,8 @@
       add_filter( 'manage_users_columns', array($this,'ppp_modify_user_column_table') );
       add_filter( 'manage_users_custom_column', array($this,'ppp_modify_user_table_row'), 10, 3 );
       add_action('wp_login', array($this,'ppp_login_check'), 10, 2);
+      // add_action( 'validate_password_reset' , array($this,'ppp_password_min_length_check') ,10, 2 );
+
       // add_action('wp_logout', array($this,'ppp_after_logout'), 10, 2);
       // add_filter( 'login_redirect', 'ppp_login_redirect', 10, 3 );
 
@@ -39,6 +41,14 @@
       $this->email_admin = (!empty(get_option( 'ppp_admin_email')) )?get_option( 'ppp_admin_email'):get_option('admin_email') ;
       $this->message = '';
       $this->admin_code = (!empty(get_option('ppp_admin_code')))?get_option('ppp_admin_code'):$this->default_admin_code;
+      $this->debug=false;
+      $this->email_send=true; // if false it will create log email
+      $this->arr_code=array();
+      $this->user='';
+      $this->logfile_path = plugin_dir_path( __FILE__ ).'log/';
+      $this->logfile = 'email.log';
+      // $this->logemail = true;
+
   	}
 
     function init(){
@@ -46,8 +56,7 @@
         $this->ppp_register_process();
       if (isset($_POST['act']) && $_POST['act']=='ppp_login') 
         $this->ppp_login_process();
-      if (isset($_GET['test_email'])) 
-        $this->test_email();
+
 
       //for activating user
       if (isset($_GET['ppp_code'])) 
@@ -58,6 +67,10 @@
         $this->ppp_user_update();
       }
       
+      if ($this->debug) { //enabling this function for testing only
+        if (isset($_GET['test_email'])) 
+          $this->test_email();
+      }
       if(!empty($_GET['custom_logout_message'])){
        add_filter('login_message', array($this,'ppp_login_message'));
       }
@@ -80,7 +93,7 @@
           if ($status=='pending') {
             $message = 'Your account still pending';
           }elseif ($status=='approved') {
-            $message = 'You need to activate your account, check you email for ';
+            $message = 'You need to activate your account, check your email for confirmation';
           }elseif ($status=='rejected') {
             $message = 'Your account has been denied by admin';
           }elseif ($status=='valid') {
@@ -97,7 +110,8 @@
 
             //add message for custom login
             // $this->message=esc_url($message,'');
-            $this->message=$message;
+            // $this->message=$message;
+            $this->set_flash_message('logout_msg',$message);
             add_action('wp_logout', array($this,'ppp_after_logout'));
             wp_logout();
             // $WP_Error = new WP_Error();
@@ -109,7 +123,7 @@
     }
 
     function ppp_after_logout(){
-      wp_redirect( site_url().'/wp-login.php?custom_logout_message='.base64_encode($this->message) );
+      wp_redirect( site_url().'/wp-login.php?custom_logout_message='.base64_encode($this->get_flash_message('logout_msg')) );
       exit();
     }
 
@@ -130,7 +144,7 @@
 
     function create_page(){
       global $wpdb;
-      $arr_page = array('login','register','user');
+      $arr_page = array('login','register','user','verification');
 
       //create new page
       foreach ($arr_page as $page) {
@@ -152,8 +166,23 @@
       //update user_login
       // $wpdb->update($wpdb->users, array('user_login' => $new_user_login), array('ID' => $user_id));
       
+
+      //checking password minimum length
+      /*$password_length = $this->minimum_password($_POST['password']);
+      if (!$password_length) {
+        // $error .= '<p>Minimum password is 8 character</p>';
+        $this->set_flash_message('user','<p>Minimum password is 8 character</p>');
+        return;
+      }*/
+
+      //checking week password
+      if ($this->check_weak_password($user['email'],$user['password'])) {
+        $this->set_flash_message('user','<strong>ERROR</strong>: Your password is too week');
+      }
+
       //check if password and current password filled
       if (!empty($_POST['password']) && !empty($_POST['current_password'])) {
+        require_once( ABSPATH . 'wp-includes/class-phpass.php' );
         $wp_hasher = new PasswordHash(8, TRUE);
 
         $password_hashed = $user->data->user_pass;
@@ -163,16 +192,20 @@
         if($wp_hasher->CheckPassword($plain_password, $password_hashed)) {
             $userdata['user_pass']=$_POST['password'];
         } else {
-            $this->message='Your current password is wrong';
+            // $this->message='Your current password is wrong';
+            $this->set_flash_message('user','<p>Your current password is wrong</p>');
             return;
         }
       }elseif (!empty($_POST['password']) && empty($_POST['current_password'])) {
-        $this->message.='<p>You should add current password</p>';
+        // $this->message.='<p>You should add current password</p>';
+        $this->set_flash_message('user','<p>Your current password is wrong</p>');
       }elseif (empty($_POST['password']) && !empty($_POST['current_password'])) {
-        $this->message.='<p>You should add new password</p>';
+        // $this->message.='<p>You should add new password</p>';
+        $this->set_flash_message('user','<p>You should add new password</p>');
       }
 
-     
+      
+
       //update user
       $update = wp_update_user( $userdata );
 
@@ -185,9 +218,14 @@
           'nickname'=>$_POST['email'],
           'private_banker_name'=>$_POST['private_banker_name'],
         );
-        $this->update_user_meta_key($user->ID,$user_meta);
+        $update_meta = $this->update_user_meta_key($user->ID,$user_meta);
+        if ($update_meta!=true) { //there is error
+          $this->set_flash_message('user',$update_meta);
+        }else{
+          $this->set_flash_message('user','<p>Your account has been updated</p>');
+        }
         //success message
-        $this->message .= 'Your account has been updated';
+        // $this->message .= 'Your account has been updated';
       }else{
         $message='';
         foreach ($update->errors as $key => $error_type) {
@@ -196,17 +234,27 @@
           }
         }
         //sending error message
-        $this->message = $message;
+        // $this->message = $message;
+        $this->set_flash_message('user',$message);
       }
     }
 
+    //updating user meta
     function update_user_meta_key($user_id,$data){
+      $error='';
       foreach ($data as $key => $value) {
         $send = update_user_meta( $user_id, $key, $value );
+        if (!$send) {
+          $error .="<p>".str_replace('_',' ', $key)." cannot be updated</p>";
+        }
         /*if (!$send) {
           $this->message.='<p>'.$key.' failed to updated</p>';
         }*/
       }
+      if (empty($error))
+        return true;
+      else return $error;
+
     }
 
     function ppp_user_table_action( $actions, $user ) {
@@ -270,15 +318,59 @@
       global $wpdb, $wp_hasher;
         // var_dump($_POST);
         $user=$_POST;
-        $data = array(
-          'user_pass'=>$user['password'],
-          'user_login'=>$user['email'],
-          'first_name'=>$user['first_name'],
-          'last_name'=>$user['last_name'],
-          'user_email'=>$user['email'],
-        );
-        $insert = wp_insert_user($data);
-        if (is_numeric($insert)) {
+        
+        //checking required field
+        $arr_required = array('first_name','last_name','email','password','re_password','private_banker_name','private_banker_email_address');
+
+        $error = '';
+        foreach ($arr_required as $req ) {
+          if (empty($user[$req])) {
+            //retrive error message
+            $error .= '<p>'.str_replace('_', ' ', $req).' is required'.'<p>';
+          }
+        }
+
+        //checking validation banker
+        $banker_list = get_option('ppp_banker_list');
+        if ($banker_list) {
+          $arr_banker_list = explode(',', $banker_list);
+          if (!in_array($user['private_banker_email_address'], $arr_banker_list)) {
+            //set error message
+            $error .= '<p> banker email : '.$user['private_banker_email_address'].' is not valid<p>';
+          }
+        }
+        
+        //checking password minimum length
+        /*$password_length = $this->minimum_password($user['password']);
+        if (!$password_length) {
+          $error .= '<p>Minimum password is 8 character</p>';
+        }*/
+
+        //checking week password
+        $week_password = $this->check_weak_password($user['email'],$user['password']);
+        if ($week_password) {
+          $error .='<strong>ERROR</strong>: Your password is too week';
+        }
+
+        // var_dump($week_password);die();
+        
+        if (empty($error)) { //registering user
+          $data = array(
+            'user_pass'=>$user['password'],
+            'user_login'=>$user['email'],
+            'first_name'=>$user['first_name'],
+            'last_name'=>$user['last_name'],
+            'user_email'=>$user['email'],
+          );
+          $insert = wp_insert_user($data);
+        }
+        else {
+          //returning error message
+          $this->set_flash_message('register',$error);
+          return; 
+        }
+
+        if (is_numeric($insert)) { //succefully register
 
           //sending email to admin
           
@@ -290,14 +382,21 @@
           //message
           $url = $this->ppp_gen_url($user->ID);
           $message = $this->load_email_template('admin-new_member',array('user'=>$user,'user_meta'=>$user_meta,'url'=>$url));
-          //sending message to admin
-          $send = $this->email($this->email_admin, $subject, $message); 
+          //sending message to admin and cc banker
+          $send = $this->email($this->email_admin,array($user_meta['private_banker_email_address'][0]), $subject, $message); 
+          
+          //sending passcode message to banker -> not use yet
+          /*$subject = 'New Passcode for user '.$user->data->user_email;
+          $message = $this->load_email_template('banker-new_passcode',array('user_meta'=>$user_meta));
+          $send = $this->email($user_meta['private_banker_email_address'][0],'', $subject, $message); */
+          
           //sending message to user
           $subject = get_bloginfo('name')." - Thankyou for your registration";
           $message = $this->load_email_template('user-register',array('user_meta'=>$user_meta));
-          $send = $this->email($user->data->user_email, $subject, $message); 
+          $send = $this->email($user->data->user_email,'', $subject, $message); 
           // var_dump($send);
-          $this->message = "You've been registered, your account will be review first by admin";
+          // $this->message = "You've been registered, your account will be review first by admin";
+          $this->set_flash_message('register_success',"<p>Thank you for registering. This site requires all users to be relationship managed high net worth customers. An email will be sent to your Private Banker to confirm that you are relationship managed and then you will be granted access to this site. Your privacy is of utmost importance to us and by verifying all users, maintains the exclusive use and privacy of this platform</p>");
         }else{
           $message =''; 
           foreach ($insert->errors as $key => $error_type) {
@@ -305,7 +404,8 @@
               $message .=$value_error; 
             }
           }
-          $this->message = $message;
+          $this->set_flash_message('register',$message);
+          // $this->message = $message;
           // var_dump($insert->errors);
         }
         // die();
@@ -338,20 +438,20 @@
           // var_dump($data_user);
           // var_dump($status);
         if ($status=='pending') {
-          $this->message="Your account Not activated";
+          $this->set_flash_message('login',"Your account is still waiting approval");
         }elseif ($status=='approved') {
-          $this->message="Please confirm you identify from you email confirmation";
+          $this->set_flash_message('login',"Please activate you identify from you email confirmation");
         }elseif ($status=='rejected') {
-          $this->message="Your account is rejected by admin";
+          $this->set_flash_message('login',"Your account is rejected by admin");
         }
-        if (empty($this->message)) {
+        if (empty($this->get_flash_message('login'))) {
 
           //validation and login user
           $cred = array('email'=>$_POST['email'],'password'=>$_POST['password']);
           $this->ppp_login_validation($cred);
         }
       }else{
-        $this->message = "Email is not Exist"; 
+        $this->set_flash_message('login',"Email is not Exist"); 
       }
       // return $message;
         
@@ -380,11 +480,14 @@
       $data_user = get_user_by('ID',$user_id);
       if (!in_array( 'administrator', $data_user->roles )) { //updating meta user if not admin role
         $user_meta = array(
-          'private_banker_name'=>(isset( $_POST['private_banker_name'] ))?isset( $_POST['private_banker_name'] ):'',
-          'phone'=>(isset( $_POST['phone'] ))?isset( $_POST['phone'] ):'',
+          'private_banker_name'=>(isset( $_POST['private_banker_name'] ))?$_POST['private_banker_name']:'',
+          'phone'=>(isset( $_POST['phone'] ))?$_POST['phone']:'',
+          'private_banker_ph_number'=>(isset( $_POST['private_banker_ph_number'] ))?$_POST['private_banker_ph_number']:'',
+          'private_banker_email_address'=>(isset( $_POST['private_banker_email_address'] ))?$_POST['private_banker_email_address']:'',
           'activation_key'=>$activation_key,
           'status'=>'pending',
           'show_admin_bar_front'=> 'false', //disable toolbar all user when registered
+          'banker_code'=> rand ( 0,9999), //generate banker code to continue accept user
         );
         //updating all usermeta
         $this->update_user_meta_key($user_id,$user_meta);
@@ -392,37 +495,66 @@
     }
 
     function test_email (){
-      $activate_key = strtotime("now").'123';
+      /*$activate_key = strtotime("now").'123';
       var_dump("admin code = ".$this->admin_code);
-      var_dump($activate_key);
-      // $headers = array()'Content-Type: text/html; charset=UTF-8';    
-      // $send1 = $this->email($this->email_admin, 'subject11', 'message11'); 
-      $url = $this->ppp_gen_url($_GET['id'],true);
-      var_dump($url);
-      var_dump("admin email = ".$this->email_admin);
+      var_dump($activate_key);*/
+
+      /*$send1 = $this->email($this->email_admin,'', 'subject12', 'message12'); 
+      var_dump('sending = '.$send1);
+      var_dump("admin email = ".$this->email_admin);*/
+
+      //test generate url
+      /*$url = $this->ppp_gen_url($_GET['id'],true);
+      var_dump($url);*/
 
       //get user
-      $data_user = get_user_by('ID',$_GET['id']);
+      /*$data_user = get_user_by('ID',$_GET['id']);
       echo "<pre>";
       var_dump($data_user);
-      echo "</pre>";
+      echo "</pre>";*/
 
-      var_dump(get_bloginfo('name'));
+      /*var_dump(get_bloginfo('name'));
       var_dump("From:".get_bloginfo('name')." <".$this->email_admin.">");
-      // var_dump('sending = '.$send1);
       $message = $this->load_email_template('test',array('user'=>'rega'));
-      var_dump($message);
+      var_dump($message);*/
 
+      global $wpdb;
+      $sql = "SHOW COLUMNS FROM wp_users";    
+      // $query = $wpdb->query($sql,ARRAY_A) or die(mysql_error() . "<br>$sql<br>");
+      $query = $wpdb->get_col("DESC wp_users",0);
+      // $row = mysql_fetch_assoc($query);
+      echo "<pre>";
+      foreach ($query as $value) {
+        var_dump($value);
+      }
+      echo "</pre>";
       die();
     }
 
-    function email($to,$subject,$message,$attachment=array()){
+    function email($to,$cc='',$subject,$message,$attachment=array()){
       $headers = array(
             "Content-Type: text/html; charset=UTF-8 ",
             "From:".get_bloginfo('name')." <".$this->email_admin.">",
             // "From:rega site <rega.blank@gmail.com>"
           );
-      $send = wp_mail($to, $subject, $message ,$headers ,$attachment); 
+      if (is_array($cc)) {
+        $header_cc ='Cc: ';
+        foreach ($cc as $value) {
+          $header_cc.=$value.',';
+        }
+        $header_cc =substr($header_cc, 0,-1);
+        $headers[]=$header_cc;
+      }
+      if ($this->email_send) {
+        $send = wp_mail($to, $subject, $message ,$headers ,$attachment); 
+      }else {
+        $send = true;
+        //create logfile 
+        $content = 'Email:'.date('Y-m-d H:i:s').PHP_EOL;
+        $content .= 'content: '.PHP_EOL.$message;
+        $content .= PHP_EOL.'------------'.PHP_EOL;
+        $this->do_log($content);
+      }
       return $send;
     }
 
@@ -435,33 +567,45 @@
       global $wpdb;
       $hash_code = $_GET['ppp_code'];
       $code = base64_decode($hash_code);
-      $arr_code = json_decode($code,true);
       // var_dump($arr_code);
+      /*var_dump($code);
+      die();*/
       if (!$this->isJson($code)) {
-        $this->ppp_force_404();
+        // $this->ppp_force_404();
+        //redirect to verify page to get error message
+        $this->ppp_verify_page();        
       }
-      // var_dump($this->isJson($code));
-      // die();
+      $arr_code = json_decode($code,true);
+      /*var_dump($arr_code);
+      die();*/
+      //set code to global
+      $this->arr_code = $arr_code;
       $user_id = $arr_code['user_id'];
       $code = $arr_code['code'];
       $data_user = get_user_by('ID',$user_id);
+      
+      //set user to global
+      $this->user = $data_user;
+
       $type_act = $arr_code['act'];
       $admin_code = isset($arr_code['admin_code'])?$arr_code['admin_code']:'';
       $admin_mode = (isset($arr_code['ppp_admin_mode']))?$arr_code['ppp_admin_mode']:'';
 
       if (!$data_user) { // if data user not existed
         // global $wp_query;
-        // $wp_query->set_404();
-        $this->ppp_force_404();
+        // $this->ppp_force_404();
+        
+        //redirect to verify page to get error message
+        $this->ppp_verify_page();        
       }
       else{
         $user_meta = get_user_meta( $data_user->ID );
         //activating process
         // var_dump($user_meta);
         // var_dump($code);
-        if ($type_act=='activate_user') {
+        if ($type_act=='activate_user' && $code == $user_meta['activation_key'][0] && $user_meta['status'][0]=='approved') {
           //match activation key with code from user
-          if ($code == $user_meta['activation_key'][0] && $user_meta['status'][0]=='approved') {
+          // if () {
             //updating user meta for validating user
             update_user_meta($user_id, 'status', 'valid');
             //empty activation key user
@@ -474,15 +618,27 @@
             
             $cred = array('ID'=>$data_user->ID,'username'=>$data_user->data->user_login);
             //get user page id
-            $user_page_id=$wpdb->get_var("SELECT `ID` FROM $wpdb->posts where `post_content` like '%[ppp_load_page template=user]%' and post_status='publish'");
+            /*$user_page_id=$wpdb->get_var("SELECT `ID` FROM $wpdb->posts where `post_content` like '%[ppp_load_page template=user]%' and post_status='publish'");
+            $url = get_permalink( $user_page_id);*/
             //get user page url
-            $url = get_permalink( $user_page_id);
-            $this->ppp_login_validation($cred,true,$url);          
-          }else{
+            // $redirect = $this->get_url('user');
+
+            //sending admin email to notify this user has been confirm
+            $message = $this->load_email_template('admin-user_activated',array('user'=>$data_user,'user_meta'=>$user_meta));
+            $this->email($this->email_admin,'','Your user has been Activated',$message);
+            //set success message
+            //redirect on login page
+            $location = $this->get_url('login');
+            if (wp_redirect( $location )) {
+              $this->set_message('activate_complete','Thanks for activating your account. please sign using your email and password');exit();
+            }
+            //user auto login after activated
+            // $this->ppp_login_validation($cred,true,$redirect);          
+          /*}else{
             $this->ppp_force_404();
-          }
-        }elseif ($type_act=='accept_user' && $admin_code == $this->admin_code) {
-          if ($code == $user_meta['activation_key'][0]) {
+          }*/
+        }elseif ($type_act=='accept_user' && $admin_code == $this->admin_code && $code == $user_meta['activation_key'][0]) { // maching admin code link with admin code database
+          // if ($code == $user_meta['activation_key'][0]) {
             //updating user meta for validating user
             update_user_meta($user_id, 'status', 'approved');
             //sending email to user
@@ -491,23 +647,31 @@
             $subject = "Confirmation Account from ".get_bloginfo();
             $url = $this->ppp_gen_url($user_id);
             $message = $this->load_email_template('user-confirmation',array('user_meta'=>$user_meta,'url'=>$url));
-            $send = $this->email($data_user->data->user_email, $subject, $message ); 
+            $send = $this->email($data_user->data->user_email,'', $subject, $message ); 
 
             // var_dump($send);
             if (!empty($admin_mode) && $admin_mode==1) {
               add_action( 'admin_notices', array($this,'ppp_accept_notice') );
             }else{
-              die('You have accept user with email '.$data_user->data->user_email);
+              //redirect to activate url
+              // $activation_url = $this->get_url('activation');
+              $msg = base64_encode('User with email '.$data_user->data->user_email.' has been accepted ');
+              //parameter user_id and code not use yet, maybe for future
+              // wp_redirect( $activation_url.'?msg='.$msg.'&user_id='.$user_id.'&code='.$code, $status );exit();
+              $this->ppp_verify_page($msg);
+
+              // die('You have accept user with email '.$data_user->data->user_email);
             }
-          }else
-            $this->ppp_force_404();
-        }elseif ($type_act=='reject_user' && $admin_code == $this->admin_code) {
-          if ($code == $user_meta['activation_key'][0]) {
+          /*}else
+            $this->ppp_force_404();*/
+        }elseif ($type_act=='reject_user' && $admin_code == $this->admin_code && $code == $user_meta['activation_key'][0]) { // maching admin code link with admin code database
+          // if ($code == $user_meta['activation_key'][0]) {
             //updating user meta for validating user
             update_user_meta($user_id, 'status', 'rejected');
             //updating user meta activation_key to prevent user to activate with old link
-            $activation_key = $this->gen_activation_key($user_id);
-            update_user_meta($user_id, 'activation_key', $activation_key);
+            // $activation_key = $this->gen_activation_key($user_id);
+            // update_user_meta($user_id, 'activation_key', $activation_key);
+
 
             /*//updating user meta remove activation key
             update_user_meta($user_id, 'activation_key', '');*/
@@ -517,30 +681,48 @@
             //email confirmation account
             $subject = "Rejected Account from ".get_bloginfo();
             $message = $this->load_email_template('user-rejected',array('user_meta'=>$user_meta));
-            $send = $this->email($data_user->data->user_email, $subject, $message); 
+            $send = $this->email($data_user->data->user_email,'', $subject, $message); 
             // var_dump($send);
             if (!empty($admin_mode) && $admin_mode==1) {
               add_action( 'admin_notices', array($this,'ppp_deny_notice') );
             }else{
-              die('You have reject user with email '.$data_user->data->user_email);
+              //redirect to activate url
+              /*$activation_url = $this->get_url('activation');
+              //parameter user_id and code not use yet, maybe for future
+              wp_redirect( $activation_url.'?msg='.$msg.'&user_id='.$user_id.'&code='.$this->get_arr_code()['code'], $status );*/
+
+              $msg = base64_encode('User with email '.$data_user->data->user_email.' has been rejected ');
+              $this->ppp_verify_page($msg);
+
+              // die('You have reject user with email '.$data_user->data->user_email);
             }
             
-          }else{
+          /*}else{
             if (!empty($admin_mode) && $admin_mode==1) {
               add_action( 'admin_notices', array($this,'ppp_error_notice') );
             }else{
               $this->ppp_force_404();
             }
-          }
+          }*/
         }else{
-          if (!empty($admin_mode) && $admin_mode==1) {
+          if (!empty($admin_mode) && $admin_mode==1) { //get error notice for wp-admin
             add_action( 'admin_notices', array($this,'ppp_error_notice') );
             // die('Yu are awesome');
           }else{
-            $this->ppp_force_404();
+            //redirect to verification page for retrive error message
+            $this->ppp_verify_page();
           }
         }
       }
+    }
+
+    function ppp_verify_page($msg=''){
+      //redirect to verification page and display error message
+      $activation_url = $this->get_url('verification');
+      if (empty($msg)) $msg = base64_encode('Sorry Your link has been expired or cannot be use anymore, Thanks');
+      
+      //parameter user_id and code not use yet, maybe for future
+      wp_redirect( $activation_url.'?msg='.$msg.'&user_id='.$this->user->ID.'&code='.$this->arr_code['code'] );exit();
     }
 
     //displaying error in admin
@@ -631,7 +813,8 @@
         $creds_login['remember'] = (isset($creds['remember']))?$creds['remember']:true;
         $user = wp_signon( $creds_login, false );
         if ( is_wp_error($user) ){
-          $this->message = $user->get_error_message();
+          // $this->message = $user->get_error_message();
+          $this->set_flash_message('login',$user->get_error_message());
           // die();
         }else{
           if (!empty($url)) {
@@ -658,6 +841,128 @@
             default:
         }
         return $val;
+    }
+    //set message for global
+    function set_flash_message($name='msg',$content=''){
+      $this->message= array($name=>$content);
+    }
+
+    function set_message($name='msg',$content){
+      // $_SESSION[$name]=$content;
+      setcookie($name, $content, time() + 10,COOKIEPATH); // 86400 = 1 day
+    }
+
+    function get_message($name='msg'){
+      $temp_message = !empty($_COOKIE[$name])?$_COOKIE[$name]:false;
+      
+      //destroy message
+      /*$pageWasRefreshed = isset($_SERVER['HTTP_CACHE_CONTROL']) && $_SERVER['HTTP_CACHE_CONTROL'] === 'max-age=0';
+      if($pageWasRefreshed ) {
+        if (isset($_COOKIE[$name])) {
+          setcookie($name, "", time() -3600 ,COOKIEPATH,COOKIE_DOMAIN,false); // 86400 = 1 day
+        }
+      }*/
+      return $temp_message;
+      // setcookie($name, $content, time() + 5, "/"); // 86400 = 1 day
+    }
+
+    //get message for global
+    function get_flash_message($name){
+      // var_dump($this->message);
+      if (isset($this->message[$name])) {
+        return $this->message[$name];
+      }else return false;
+    }
+
+    //get url page by template
+    function get_url($page){
+      global $wpdb;
+      //get user page id
+      $user_page_id=$wpdb->get_var("SELECT `ID` FROM $wpdb->posts where `post_content` like '%[ppp_load_page template=$page]%' and post_status='publish'");
+      //get user page url
+      if (!empty($user_page_id)) {
+        return get_permalink( $user_page_id);
+      }else{
+        return false;
+      }
+    }
+
+    function do_log($msg){
+      if ($this->email_send==false) {
+        if (!file_exists($this->logfile_path)) { //check log folder
+          # code...
+          mkdir($this->logfile_path);
+          chmod($this->logfile_path, 0755);
+        }else chmod($this->logfile_path, 0755);
+
+        //create logfile or open it
+        if (!file_exists($this->logfile_path.$this->logfile)) { //check log file 
+          $handle = fopen($this->logfile_path.$this->logfile, 'w');
+          //write logfile
+          fwrite($handle, $msg);
+          // file_put_contents($this->logfile_path.$this->logfile, $msg);
+        }else{
+          $handle = fopen($this->logfile_path.$this->logfile, 'a');
+          //write logfile
+          // file_put_contents($this->logfile_path.$this->logfile, $msg);
+          fwrite($handle, $msg);
+        }
+
+      }
+
+    }
+
+    /*function ppp_password_min_length_check( $errors, $user){
+        if(strlen($_POST['password']) < 8)
+            $errors->add( 'password_too_short', 'ERROR: password is too short. Minimum is 8' );
+    }*/
+
+    /*function minimum_password($password){
+      if (strlen($password) < 8) {
+        return false;
+      }else return true;
+    }*/
+
+    //check week password, it come from zoo updater
+    function check_weak_password($username,$password){
+      $forbidden = array(
+      $username,
+        '123',
+        '1234',
+        '12345',
+        '123456',
+        '1234567',
+        '12345678',
+        '123456789',
+        '1234567890',
+        '654321',
+        'admin',
+        'weak liver',
+        'password',
+        'admin123',
+        '123123',
+        'abc123',
+        'qwerty',
+        '111111',
+        'iloveyou',
+        'master',
+        'password1',
+        'pass',
+        'qazwsx',
+        'administrator',
+        'qwe123',
+        'root',
+        'adminadmin',
+        'monkey',
+        'dragon',
+        'letmein',
+        'trustno1',
+        'superman',
+        'admin1',
+      );
+      if (in_array(strtolower($password), $forbidden)){
+        return true;
+      }else return false;
     }
   }
 

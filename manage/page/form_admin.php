@@ -14,5 +14,19 @@ $forms = array(
 			'type'=>'text',
 			'desc'=>'Secure code to prevent stranger to accept the user'
 		),
+		array(
+			'name'=>'ppp_admin_pascode',
+			'title'=>'Admin Pascode',
+			'action'=>'ppp_admin_pascode',
+			'type'=>'text',
+			'desc'=>'secure code for admin to activate user from email link'
+		),
+		array(
+			'name'=>'ppp_banker_list',
+			'title'=>'Banker List',
+			'action'=>'ppp_banker_list',
+			'type'=>'textarea',
+			'desc'=>'List valid banker, split by comma'
+		),
 	);
 ?>

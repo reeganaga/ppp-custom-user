@@ -70,6 +70,18 @@ class ppp_admin_page
 										</td>
 									</tr>
 								<?php break;
+								case 'textarea':?>
+									<tr valign="top">
+										<th scope="row"><?php echo $value['title']; ?></th>
+										<td>
+											<textarea cols="50" rows="5" class="form_input" <?php echo (isset($value['action']))?'data-action="'.$value['action'].'"':''; ?> name="<?php echo $value['name']; ?>" id="<?php echo $value['name']; ?>"><?php echo (isset($value['std'])) ? $value['std'] : get_option($value['name']); ?></textarea>
+											<?php if ($value['desc']): ?>
+												<p><?php echo $value['desc'] ?></p>
+											<?php endif ?>
+											<div class="message"></div>
+										</td>
+									</tr>
+								<?php break;
 								default:?>
 								UNDEFINED TYPE
 								<?php break;
@@ -96,7 +108,7 @@ class ppp_admin_page
 		$protected_field= array('ppp_process_admin');
 		foreach ($data as $key => $value) {
 			if ( in_array($key, $protected_field)) continue;
-			update_option( $key, $value);
+			update_option( $key, trim($value));
 		}
 	}
 }
